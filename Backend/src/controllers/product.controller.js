@@ -1,23 +1,176 @@
 const db = require('../config/database');
 
-const getProducts = (req, res) => {
-    const sql = 'SELECT * FROM products';
 
-    db.query(sql, (err, results) => {
-        if (err) {
-            console.error(err);
+const getProducts = (req, res) => {
+    const { search, category_id, page, limit, sort } = req.query;
+
+    // 1. Validasi pagination
+    const parseInteger = (value, defaultValue, min, max) => {
+        if (value === undefined) return defaultValue;
+
+        if (
+            typeof value !== 'string' ||
+            !/^\d+$/.test(value)
+        ) {
+            return null;
+        }
+
+        const number = Number(value);
+
+        if (
+            !Number.isSafeInteger(number) ||
+            number < min ||
+            number > max
+        ) {
+            return null;
+        }
+
+        return number;
+    };
+
+    const currentPage = parseInteger(page, 1, 1, 2147483647);
+    const perPage = parseInteger(limit, 10, 1, 100);
+
+    if (currentPage === null || perPage === null) {
+        return res.status(400).json({
+            message: 'page harus minimal 1 dan limit harus antara 1-100'
+        });
+    }
+
+    // 2. Validasi pencarian
+    if (
+        search !== undefined &&
+        (typeof search !== 'string' || search.trim().length > 100)
+    ) {
+        return res.status(400).json({
+            message: 'search harus berupa teks maksimal 100 karakter'
+        });
+    }
+
+    // 3. Validasi filter kategori
+    const categoryId = parseInteger(
+        category_id,
+        null,
+        1,
+        2147483647
+    );
+
+    if (category_id !== undefined && categoryId === null) {
+        return res.status(400).json({
+            message: 'category_id harus berupa bilangan bulat positif'
+        });
+    }
+
+    // 4. Whitelist pengurutan
+    const sortOptions = {
+        price_asc: 'price ASC, id ASC',
+        price_desc: 'price DESC, id DESC',
+        name_asc: 'name ASC, id ASC',
+        name_desc: 'name DESC, id DESC',
+        newest: 'id DESC',
+        oldest: 'id ASC'
+    };
+
+    const sortBy = sort || 'newest';
+
+    if (!Object.prototype.hasOwnProperty.call(sortOptions, sortBy)) {
+        return res.status(400).json({
+            message: 'sort harus berupa price_asc, price_desc, name_asc, name_desc, newest, atau oldest'
+        });
+    }
+
+    // 5. Susun kondisi SQL
+    const conditions = [];
+    const values = [];
+
+    if (search !== undefined && search.trim() !== '') {
+        conditions.push('name LIKE ?');
+        values.push(`%${search.trim()}%`);
+    }
+
+    if (categoryId !== null) {
+        conditions.push('category_id = ?');
+        values.push(categoryId);
+    }
+
+    const whereClause = conditions.length
+        ? `WHERE ${conditions.join(' AND ')}`
+        : '';
+
+    const offset = (currentPage - 1) * perPage;
+
+    // 6. Hitung jumlah seluruh produk sesuai filter
+    const countSql = `
+        SELECT COUNT(*) AS total
+        FROM products
+        ${whereClause}
+    `;
+
+    db.query(countSql, values, (countError, countResults) => {
+        if (countError) {
+            console.error('Gagal menghitung produk:', countError);
+
             return res.status(500).json({
-                message: 'Gagal mengambil data produk'
+                message: 'Gagal menghitung data produk'
             });
         }
-        res.json(results);
+
+        const total = Number(countResults[0].total);
+
+        // Hindari OFFSET yang terlalu besar untuk MySQL
+        if (!Number.isSafeInteger(offset) || offset > 4294967295) {
+            return res.status(400).json({
+                message: 'Nomor halaman terlalu besar'
+            });
+        }
+
+        // 7. Ambil data sesuai halaman, filter, dan pengurutan
+        const sql = `
+            SELECT *
+            FROM products
+            ${whereClause}
+            ORDER BY ${sortOptions[sortBy]}
+            LIMIT ? OFFSET ?
+        `;
+
+        db.query(
+            sql,
+            [...values, perPage, offset],
+            (err, results) => {
+                if (err) {
+                    console.error('Gagal mengambil produk:', err);
+
+                    return res.status(500).json({
+                        message: 'Gagal mengambil data produk'
+                    });
+                }
+
+                return res.status(200).json({
+                    data: results,
+                    pagination: {
+                        page: currentPage,
+                        limit: perPage,
+                        total,
+                        totalPages: Math.ceil(total / perPage)
+                    },
+                    filters: {
+                        search: search?.trim() || null,
+                        category_id: categoryId,
+                        sort: sortBy
+                    }
+                });
+            }
+        );
     });
 };
+
 
 const getProductById = (req, res) => {
     const { id } = req.params;
 
-    const sql = 'SELECT * FROM products WHERE id = ?';
+    const sql = `
+    SELECT * FROM products WHERE id = ?
+    `;
 
     db.query(sql, [id], (err, results) => {
         if (err) {
@@ -151,7 +304,7 @@ const deleteProduct = (req, res) => {
             });
         }
         if (result.affectedRows === 0) {
-            return res.status(400).json({
+            return res.status(404).json({
                 message: 'Produk tidak ditemukan'
             });
         }
@@ -160,6 +313,7 @@ const deleteProduct = (req, res) => {
         });
     });
 };
+
 module.exports = {
     getProducts,
     getProductById,

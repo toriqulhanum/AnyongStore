@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('./config/database')
 
 const productRoute = require('./routes/product.route');
+const categoryRoutes = require('./routes/category.route');
 
 const app = express();
 
@@ -16,6 +17,7 @@ db.query('SELECT 1', (err) => {
 });
 
 app.use('/api/products', productRoute);
+app.use('/api/categories', categoryRoutes);
 
 app.get('/', (req, res) => {
     res.send('AnyongStore API is running!');
