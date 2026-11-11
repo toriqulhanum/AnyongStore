@@ -4,7 +4,6 @@ const db = require('../config/database');
 const getProducts = (req, res) => {
     const { search, category_id, page, limit, sort } = req.query;
 
-    // 1. Validasi pagination
     const parseInteger = (value, defaultValue, min, max) => {
         if (value === undefined) return defaultValue;
 
@@ -37,7 +36,6 @@ const getProducts = (req, res) => {
         });
     }
 
-    // 2. Validasi pencarian
     if (
         search !== undefined &&
         (typeof search !== 'string' || search.trim().length > 100)
@@ -47,7 +45,6 @@ const getProducts = (req, res) => {
         });
     }
 
-    // 3. Validasi filter kategori
     const categoryId = parseInteger(
         category_id,
         null,
@@ -61,7 +58,6 @@ const getProducts = (req, res) => {
         });
     }
 
-    // 4. Whitelist pengurutan
     const sortOptions = {
         price_asc: 'price ASC, id ASC',
         price_desc: 'price DESC, id DESC',
@@ -79,7 +75,6 @@ const getProducts = (req, res) => {
         });
     }
 
-    // 5. Susun kondisi SQL
     const conditions = [];
     const values = [];
 
@@ -99,7 +94,6 @@ const getProducts = (req, res) => {
 
     const offset = (currentPage - 1) * perPage;
 
-    // 6. Hitung jumlah seluruh produk sesuai filter
     const countSql = `
         SELECT COUNT(*) AS total
         FROM products
@@ -117,14 +111,12 @@ const getProducts = (req, res) => {
 
         const total = Number(countResults[0].total);
 
-        // Hindari OFFSET yang terlalu besar untuk MySQL
         if (!Number.isSafeInteger(offset) || offset > 4294967295) {
             return res.status(400).json({
                 message: 'Nomor halaman terlalu besar'
             });
         }
 
-        // 7. Ambil data sesuai halaman, filter, dan pengurutan
         const sql = `
             SELECT *
             FROM products
