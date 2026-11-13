@@ -1,13 +1,18 @@
+
 const express = require('express');
 
 const {
     checkout,
     getMyOrders,
-    getOrderById
+    getOrderById,
+    getAllOrders,
+    getOrderDetailAdmin,
+    updateOrderStatus
 } = require('../controllers/order.controller');
 
 const {
-    authenticateToken
+    authenticateToken,
+    authorizeRole
 } = require('../middlewares/auth.middleware');
 
 const router = express.Router();
@@ -25,10 +30,30 @@ router.post(
 );
 
 router.get(
+    '/admin',
+    authenticateToken,
+    authorizeRole('admin'),
+    getAllOrders
+);
+
+router.get(
+    '/admin/:id',
+    authenticateToken,
+    authorizeRole('admin'),
+    getOrderDetailAdmin
+);
+
+router.patch(
+    '/admin/:id/status',
+    authenticateToken,
+    authorizeRole('admin'),
+    updateOrderStatus
+);
+
+router.get(
     '/:id',
     authenticateToken,
     getOrderById
-)
+);
 
 module.exports = router;
-

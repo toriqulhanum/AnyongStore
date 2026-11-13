@@ -333,9 +333,238 @@ const getOrderById  = async (req, res) => {
     }
 };
 
+const getAllOrders = async (req, res) => {
+    try {
+        const [orders] = await pool.query(
+            `SELECT
+                o.id,
+                o.user_id,
+                u.name AS customer_name,
+                u.email AS customer_email,
+                o.total_amount,
+                o.status,
+                o.shipping_address,
+                o.created_at,
+                o.updated_at
+            FROM orders o
+            JOIN users u ON u.id = o.user_id
+            ORDER BY o.created_at DESC`
+        );
+
+        return res.status(200).json({
+            message: 'berhasil mendapatkan riwayat pesanan',
+            total_orders: orders.length,
+            orders
+        });
+    } catch (err) {
+        console.error('Gagal mengambil riwayat pesanan:', err)
+
+        return res.status(500).json({
+            message: 'Gagal mengambil riwayat pesanan'
+        });
+    }
+};
+
+const getOrderDetailAdmin = async (req, res) => {
+    const {id} = req.params;
+
+    if (!/^\d+$/.test(id)) {
+        return res.status(400).json({
+            message: 'ID pesanan tidak valid'
+        });
+    }
+
+    try {
+        const [orders] = await pool.query(
+            `SELECT
+                o.id,
+                o.user_id,
+                u.name AS customer_name,
+                u.email AS customer_email,
+                o.total_amount,
+                o.status,
+                o.shipping_address,
+                o.created_at,
+                o.updated_at
+            FROM orders o
+            JOIN users u ON u.id = o.user_id
+            WHERE o.id = ?`,
+            [id]
+        );
+
+        if (orders.length === 0) {
+            return res.status(404).json({
+                message: 'pesanan tidak ditemukan'
+            });
+        }
+
+        const [items] = await pool.query(
+            `SELECT 
+                product_id,
+                product_name,
+                price,
+                quantity,
+                subtotal
+            FROM order_items
+            WHERE order_id = ?
+            ORDER BY id ASC`,
+            [id]
+        );
+
+        return res.status(200).json({
+            message: 'berhasil mengambil detail pesanan',
+            order: {
+                ...orders[0],
+                items
+            }
+        });
+    } catch (err) {
+        console.error('Gagal mengambil detail pesanan admin:', err);
+
+        return res.status(500).json({
+            message: 'Gagal mengambil detail pesanan'
+        });
+    }
+};
+
+const updateOrderStatus = async (req, res) => {
+    const {id} = req.params;
+    const {status} = req.body;
+
+    const allowedTransitions = {
+        pending: ['processing', 'cancelled'],
+        processing: ['shipped', 'cancelled'],
+        shipped: ['completed'],
+        completed: [],
+        cancelled: []
+    };
+
+    if (!/^\d+$/.test(id)) {
+        return res.status(400).json({
+            message: 'ID pesanan tidak valid'
+        });
+    }
+
+    const validStatuses = [
+        'pending',
+        'processing',
+        'shipped',
+        'completed',
+        'cancelled'
+    ];
+
+    if (
+        typeof status !== 'string' ||
+        !validStatuses.includes(status)
+    ) {
+        return res.status(400).json({
+            message: 'status pesanan tidak valid',
+            allowed_statuses: validStatuses
+        });
+    }
+
+    let connection;
+    let transactionStarted = false;
+
+    try {
+        connection = await pool.getConnection();
+
+        await connection.beginTransaction();
+        transactionStarted = true;
+
+        const [orders] = await connection.query(
+            `SELECT id, status
+            FROM orders
+            WHERE id = ?
+            FOR UPDATE`,
+            [id]
+        );
+
+        if (orders.length === 0) {
+            await connection.rollback();
+            transactionStarted = false;
+
+            return res.status(404).json({
+                message: 'pesanan tidak ditemukan'
+            });
+        }
+
+        const currentStatus = orders[0].status;
+
+        if (!allowedTransitions[currentStatus].includes(status)) {
+            await connection.rollback();
+            transactionStarted = false;
+
+            return res.status(400).json({
+                message: 'perubahan status pesanan tidak diperbolehkan',
+                current_status: currentStatus,
+                requested_status: status
+            });
+        }
+
+        if (status === 'cancelled') {
+            const [items] = await connection.query(
+                `SELECT product_id, quantity
+                FROM order_items
+                WHERE order_id = ?
+                ORDER BY product_id ASC
+                FOR UPDATE`,
+                [id]
+            );
+
+            for (const item of items) {
+                await connection.query(
+                    `UPDATE products
+                    SET stock = stock + ?
+                    WHERE id = ?`,
+                    [item.quantity, item.product_id]
+                );
+            }
+        }
+
+        await connection.query(
+            `UPDATE orders
+            SET status = ?
+            WHERE id = ?`,
+            [status, id]
+        );
+
+        await connection.commit();
+        transactionStarted = false;
+
+        return res.status(200).json({
+            message: 'status pesanan berhasil diubah',
+            order: {
+                id: Number(id),
+                previous_Status: currentStatus,
+                current_status: status
+            }
+        });
+    } catch (err) {
+        if (connection && transactionStarted) {
+            await connection.rollback();
+            transactionStarted = false;
+        }
+
+        console.error('Gagal mengubah status pesanan:', err)
+
+        return res.status(500).json({
+            message: 'Gagal mengubah status pesanan'
+        });
+    } finally {
+        if (connection) {
+            connection.release();
+        }
+    }
+};
 
 module.exports = {
     checkout,
     getMyOrders,
-    getOrderById
+    getOrderById,
+    getAllOrders,
+    getOrderDetailAdmin, 
+    getAllOrders,
+    getOrderDetailAdmin,
+    updateOrderStatus
 };
